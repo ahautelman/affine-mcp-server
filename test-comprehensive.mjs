@@ -24,6 +24,7 @@ const ASSUME_FOCUSED_COVERAGE = process.env.AFFINE_COMPREHENSIVE_ASSUME_FOCUSED_
 const FOCUSED_TOOL_COVERAGE = new Map([
   ['add_doc_to_collection', 'test-organize-tools.mjs'],
   ['add_organize_link', 'test-organize-tools.mjs'],
+  ['add_tags_to_docs', 'test-doc-decoration.mjs'],
   ['analyze_doc_fidelity', 'test-capabilities-fidelity.mjs'],
   ['append_semantic_section', 'test-semantic-page-composer.mjs'],
   ['clear_doc_property', 'test-doc-properties.mjs'],
@@ -66,6 +67,7 @@ const FOCUSED_TOOL_COVERAGE = new Map([
   ['update_collection', 'test-organize-tools.mjs'],
   ['update_collection_rules', 'test-organize-tools.mjs'],
   ['update_doc_icon', 'test-icons.mjs'],
+  ['update_doc_icons', 'test-doc-decoration.mjs'],
   ['update_doc_title', 'test-create-placement.mjs'],
   ['update_folder_icon', 'test-icons.mjs'],
   ['update_table_cell', 'test-block-editing.mjs'],

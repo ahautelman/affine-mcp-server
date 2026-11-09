@@ -55,6 +55,8 @@ import {
 import { buildMarkdownFrontmatter } from "../markdown/safety.js";
 import type { MarkdownOperation, MarkdownRenderableBlock, TextDelta } from "../markdown/types.js";
 import { addOrganizeLinkToFolder } from "./organize.js";
+import { iconSchema } from "./icons.js";
+import { docIconEntries, setExplorerIcons, type ExplorerIconInput } from "../util/explorerIcon.js";
 import { ALL_TOOLS } from "../toolSurface.js";
 import {
   type Bound,
@@ -5927,6 +5929,117 @@ export function registerDocTools(
     createTagHandler as any
   );
 
+  /**
+   * Attaches tags to many pages of an already-loaded workspace meta map.
+   * Pre: every docId is a registered workspace page (checked before any change).
+   */
+  function addTagsToPages(wsMeta: Y.Map<any>, docIds: string[], tags: string[]) {
+    const pages = getWorkspacePageEntries(wsMeta);
+    const missing = docIds.filter((id) => !pages.some((page) => page.id === id));
+    if (missing.length) throw new Error(`docId(s) not present in workspace: ${missing.join(", ")}`);
+    let changed = false;
+    const wanted = tags.map((raw) => {
+      const tag = normalizeTag(raw);
+      const { option, created } = ensureWorkspaceTagOption(wsMeta, tag);
+      changed ||= created;
+      return { tag, option };
+    });
+    const touched = docIds.map((docId) => {
+      const pageTags = ensureTagArray(pages.find((page) => page.id === docId)!.entry);
+      const added: string[] = [];
+      for (const { tag, option } of wanted) {
+        const sync = syncTagArrayToOption(pageTags, tag, option);
+        if (!sync.existed) added.push(tag);
+        changed ||= sync.changed;
+      }
+      return { docId, added, pageTags };
+    });
+    const { byId } = getWorkspaceTagOptionMaps(wsMeta);
+    return {
+      changed,
+      docs: touched.map(({ docId, added, pageTags }) => ({ docId, added, tags: resolveTagLabels(getStringArray(pageTags), byId) })),
+    };
+  }
+
+  /** Loads the workspace doc, tags the given docs, and pushes one delta if anything changed. */
+  async function addTagsToDocs(socket: WorkspaceSocket, workspaceId: string, docIds: string[], tags: string[]) {
+    const wsSnapshot = await loadDoc(socket, workspaceId, workspaceId);
+    if (!wsSnapshot.missing) throw new Error(`Workspace root document not found for workspace ${workspaceId}`);
+    const wsDoc = new Y.Doc();
+    Y.applyUpdate(wsDoc, Buffer.from(wsSnapshot.missing, "base64"));
+    const workspaceUpdate = captureDocUpdate(wsDoc);
+    const result = addTagsToPages(wsDoc.getMap("meta"), docIds, tags);
+    if (result.changed) {
+      await pushDocUpdate(socket, workspaceId, workspaceId, Buffer.from(workspaceUpdate.finish()).toString("base64"));
+    }
+    return result;
+  }
+
+  const addTagsToDocsHandler = async (parsed: { workspaceId?: string; docIds: string[]; tags: string[] }) => {
+    const workspaceId = parsed.workspaceId || defaults.workspaceId;
+    if (!workspaceId) {
+      throw new Error("workspaceId is required. Provide it as a parameter or set AFFINE_WORKSPACE_ID in environment.");
+    }
+    const { endpoint, cookie, bearer } = await getCookieAndEndpoint();
+    const socket = await connectWorkspaceSocket(wsUrlFromGraphQLEndpoint(endpoint), cookie, bearer);
+    try {
+      await joinWorkspace(socket, workspaceId);
+      const { changed, docs } = await addTagsToDocs(socket, workspaceId, parsed.docIds, parsed.tags);
+      return text({ workspaceId, tags: parsed.tags.map(normalizeTag), changed, docs });
+    } finally {
+      socket.disconnect();
+    }
+  };
+  server.registerTool(
+    "add_tags_to_docs",
+    {
+      title: "Add Tags To Documents",
+      description: "Attach one or more workspace tags to many documents with one write, creating missing tag options. Atomic: an unknown docId rejects the whole call. Returns each document's resulting tags.",
+      inputSchema: {
+        workspaceId: WorkspaceId.optional(),
+        docIds: z.array(DocId).min(1).max(200),
+        tags: z.array(TagName).min(1).max(20),
+      },
+    },
+    addTagsToDocsHandler as any
+  );
+
+  /** Applies an optional icon and tags to a freshly created doc; failures become warnings, not errors. */
+  async function finalizeDocDecoration(parsed: {
+    workspaceId: string;
+    docId: string;
+    icon?: ExplorerIconInput;
+    tags?: string[];
+  }): Promise<string[]> {
+    if (parsed.icon === undefined && !parsed.tags?.length) return [];
+    const warnings: string[] = [];
+    let socket: WorkspaceSocket | undefined;
+    try {
+      const { endpoint, cookie, bearer } = await getCookieAndEndpoint();
+      socket = await connectWorkspaceSocket(wsUrlFromGraphQLEndpoint(endpoint), cookie, bearer);
+      await joinWorkspace(socket, parsed.workspaceId);
+      if (parsed.icon !== undefined) {
+        await setExplorerIcons(socket, parsed.workspaceId, docIconEntries([{ docId: parsed.docId, icon: parsed.icon }]))
+          .catch((err: any) => warnings.push(`Doc created but icon was not set: ${err?.message ?? "unknown error"}`));
+      }
+      if (parsed.tags?.length) {
+        await addTagsToDocs(socket, parsed.workspaceId, [parsed.docId], parsed.tags)
+          .catch((err: any) => warnings.push(`Doc created but tags were not applied: ${err?.message ?? "unknown error"}`));
+      }
+    } catch (err: any) {
+      warnings.push(`Doc created but icon/tags could not be applied: ${err?.message ?? "unknown error"}`);
+    } finally {
+      socket?.disconnect();
+    }
+    return warnings;
+  }
+
+  /** Fails fast on a malformed icon or tag so no doc is created for an invalid request. */
+  function validateDocDecoration(parsed: { icon?: ExplorerIconInput; tags?: string[] }): void {
+    if (parsed.icon !== undefined) docIconEntries([{ docId: "x", icon: parsed.icon }]);
+    parsed.tags?.forEach(normalizeTag);
+  }
+
   const addTagToDocHandler = async (parsed: { workspaceId?: string; docId: string; tag: string }) => {
     const workspaceId = parsed.workspaceId || defaults.workspaceId;
     if (!workspaceId) {
@@ -6760,11 +6873,12 @@ export function registerDocTools(
 
   // CREATE DOC (high-level)
   /** Create a plain-text document and return placement metadata plus recoverable warnings. */
-  const createDocHandler = async (parsed: { workspaceId?: string; title?: string; content?: string; parentDocId?: string; folderId?: string }) => {
+  const createDocHandler = async (parsed: { workspaceId?: string; title?: string; content?: string; parentDocId?: string; folderId?: string; icon?: ExplorerIconInput; tags?: string[] }) => {
     const workspaceId = parsed.workspaceId || defaults.workspaceId;
     if (!workspaceId) {
       throw new Error("workspaceId is required. Provide it or set AFFINE_WORKSPACE_ID.");
     }
+    validateDocDecoration(parsed);
     try {
       const created = await createDocInternal({ ...parsed, workspaceId });
       const placement = await finalizeDocPlacement({
@@ -6778,10 +6892,17 @@ export function registerDocTools(
         docId: created.docId,
         folderId: parsed.folderId,
       });
+      const decorationWarnings = await finalizeDocDecoration({
+        workspaceId: created.workspaceId,
+        docId: created.docId,
+        icon: parsed.icon,
+        tags: parsed.tags,
+      });
       const warnings = mergeWarnings(
         created.warnings ?? [],
         placement.warnings,
         folderPlacement.warnings,
+        decorationWarnings,
         createDocContentWarnings(parsed.content),
       );
       return receipt("doc.create", {
@@ -6814,6 +6935,8 @@ export function registerDocTools(
         content: z.string().optional().describe("Optional initial plain text stored as one paragraph. Use create_doc_from_markdown for structured Markdown."),
         parentDocId: z.string().optional().describe("Optional parent doc to link the new doc under in the sidebar."),
         folderId: z.string().optional().describe("Optional folder ID to place the doc in. Use list_organize_nodes to find folder IDs."),
+        icon: iconSchema.optional().describe("Optional sidebar icon for the new doc (emoji or icon object). Failure to apply it is reported in warnings."),
+        tags: z.array(TagName).max(20).optional().describe("Optional workspace tags to attach to the new doc. Failure to apply them is reported in warnings."),
       },
     },
     createDocHandler as any
@@ -7243,7 +7366,10 @@ export function registerDocTools(
     strict?: boolean;
     parentDocId?: string;
     folderId?: string;
+    icon?: ExplorerIconInput;
+    tags?: string[];
   }) => {
+    validateDocDecoration(parsed);
     const parsedMarkdown = parseMarkdownToOperations(parsed.markdown);
     let operations = [...parsedMarkdown.operations];
     let title = (parsed.title ?? "").trim();
@@ -7313,6 +7439,12 @@ export function registerDocTools(
       docId: created.docId,
       folderId: parsed.folderId,
     });
+    const decorationWarnings = await finalizeDocDecoration({
+      workspaceId: created.workspaceId,
+      docId: created.docId,
+      icon: parsed.icon,
+      tags: parsed.tags,
+    });
 
     const applyWarnings: string[] = [];
     if (applied.skippedCount > 0) {
@@ -7324,6 +7456,7 @@ export function registerDocTools(
       applyWarnings,
       placement.warnings,
       folderPlacement.warnings,
+      decorationWarnings,
     );
     return {
       workspaceId: created.workspaceId,
@@ -7356,6 +7489,8 @@ export function registerDocTools(
     strict?: boolean;
     parentDocId?: string;
     folderId?: string;
+    icon?: ExplorerIconInput;
+    tags?: string[];
   }) => {
     try {
       return receipt("doc.create_from_markdown", await createDocFromMarkdownCore(parsed));
@@ -7377,6 +7512,8 @@ export function registerDocTools(
         strict: z.boolean().optional(),
         parentDocId: z.string().optional().describe("If provided, the new doc is automatically embedded into this parent doc as a linked child (visible in sidebar)."),
         folderId: z.string().optional().describe("Optional folder ID to place the doc in. Use list_organize_nodes to find folder IDs."),
+        icon: iconSchema.optional().describe("Optional sidebar icon for the new doc (emoji or icon object). Failure to apply it is reported in warnings."),
+        tags: z.array(TagName).max(20).optional().describe("Optional workspace tags to attach to the new doc. Failure to apply them is reported in warnings."),
       },
     },
     createDocFromMarkdownHandler as any

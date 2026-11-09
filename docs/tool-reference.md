@@ -134,8 +134,8 @@ check.
 
 | Tool | Purpose | Notes |
 | --- | --- | --- |
-| `create_doc` | Create a new document | `content` is stored as one plain paragraph; accepts `folderId` for immediate organize-folder placement |
-| `create_doc_from_markdown` | Create a document from Markdown content | Creates native blocks, accepts `folderId` for immediate organize-folder placement, converts `[label](LinkedPage:<docId>)` links to native inline linked-doc references, and converts `$$...$$` and `$...$` math to native equations |
+| `create_doc` | Create a new document | `content` is stored as one plain paragraph; accepts `folderId` for immediate organize-folder placement. Optional `icon` and `tags` are applied after creation; failures are reported in `warnings`. |
+| `create_doc_from_markdown` | Create a document from Markdown content | Creates native blocks, accepts `folderId` for immediate organize-folder placement, converts `[label](LinkedPage:<docId>)` links to native inline linked-doc references, and converts `$$...$$` and `$...$` math to native equations. Optional `icon` and `tags` are applied after creation; failures are reported in `warnings`. |
 | `inspect_template_structure` | Inspect a template's native AFFiNE structure and native-clone support | Helps choose a clone strategy |
 | `instantiate_template_native` | Instantiate a template via native AFFiNE block cloning, with optional Markdown fallback | Higher-fidelity than Markdown-only cloning |
 | `move_doc` | Move a document in the sidebar by relinking it under another parent | Validates resources and cycles, adds the destination first, avoids duplicate links, and reports partial source-removal failures |
@@ -161,6 +161,7 @@ imported as an inline equation in that block.
 | --- | --- | --- |
 | `update_doc_title` | Rename a document in workspace metadata and in the page block | |
 | `update_doc_icon` | Set or clear a document's sidebar icon (emoji, or named icon with optional color) | See [Sidebar icons](#sidebar-icons) |
+| `update_doc_icons` | Set or clear icons on many documents in one write | Atomic; items are `{docId, icon}`; duplicate `docId`s rejected |
 | `get_doc_icon` | Read a document's current sidebar icon | |
 | `append_block` | Append canonical block types with validation and placement control | Inline-rich-text block content accepts a plain string or formatting-preserving delta array. Also supports media, embeds, database, and edgeless blocks. `frame`/`edgeless_text`/`note`/`image` accept `x`/`y`/`width`/`height`; for `image` they set `prop:xywh` plus `prop:width`/`prop:height`, attach the block to the `affine:surface` block (edgeless, not inside a note), and make it a valid connector endpoint. When only a position is supplied, the omitted dimensions default to 100 so bounds and rendered size agree; surface-parented images that omit geometry reuse their stored `prop:width`/`prop:height` and default only a missing dimension to 100 (note images keep `[0,0,0,0]`). An explicit `placement` (a note `parentId` or a note sibling) overrides the automatic surface attachment: the image keeps its geometry but stays in the document flow and is not listed by `get_edgeless_canvas`. `note` with `text` auto-creates a child paragraph. `code` accepts `language`, `caption`, and an optional `preview` boolean, for example to open an `html` block in Preview. Bookmarks allow canonical web, mail, telephone, `affine://blob/<key>`, and `affine://doc/<id>` URLs; iframes require HTTP(S); provider embeds require HTTPS URLs on official hosts. URL validation does not make an outbound server fetch. Image and attachment `sourceId` values are exact opaque keys returned by `upload_blob`, including keys containing spaces or path separators. |
 | `update_block` | Partially update an existing text block without changing its id | `text` accepts a plain string or formatting-preserving delta array. Also supports todo checked state, list style, code block `language` and `preview` state, and same-flavour paragraph/heading/quote conversions. Cross-flavour conversions are rejected because AFFiNE replaces the block id. |
@@ -225,6 +226,7 @@ Inline page references use `{ "insert": " ", "attributes": { "reference": { "typ
 | --- | --- | --- |
 | `create_tag` | Create a reusable workspace-level tag | |
 | `add_tag_to_doc` | Attach a tag to a document | |
+| `add_tags_to_docs` | Attach several tags to many documents in one write | Atomic; unknown `docId` rejects the whole call; returns each document's resulting tags |
 | `remove_tag_from_doc` | Detach a tag from a document | |
 | `delete_tag` | Delete a workspace tag and detach it from every document | Destructive; accepts a tag id or name, rejects an ambiguous name |
 

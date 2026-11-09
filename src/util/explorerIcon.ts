@@ -111,6 +111,51 @@ function readIcon(doc: Y.Doc, key: ExplorerIconKey): ExplorerIconValue | null {
   return (raw as ExplorerIconValue) ?? null;
 }
 
+/** One icon assignment; a null icon clears the entry's icon. */
+export type ExplorerIconEntry = { key: ExplorerIconKey; icon: ExplorerIconValue | null };
+
+/** Validates `{docId, icon}` items and maps them to storage entries; rejects duplicates. */
+export function docIconEntries(items: Array<{ docId: string; icon: ExplorerIconInput }>): ExplorerIconEntry[] {
+  const seen = new Set<string>();
+  return items.map(({ docId, icon }) => {
+    if (seen.has(docId)) throw new Error(`duplicate docId in icons: ${docId}`);
+    seen.add(docId);
+    return { key: docIconKey(docId), icon: normalizeIconInput(icon) };
+  });
+}
+
+/** Applies every entry to the sub-doc, preserving each entry's `id` when clearing. */
+export function applyExplorerIcons(doc: Y.Doc, entries: ExplorerIconEntry[]): void {
+  for (const { key, icon } of entries) {
+    const map = doc.getMap(key);
+    if (!map.has("id")) map.set("id", key);
+    if (icon === null) map.delete("icon");
+    else map.set("icon", icon);
+  }
+}
+
+/**
+ * Set or clear many sidebar icons with one load and one pushed delta.
+ * Pre: entries are already normalized. Post: all entries persisted, or none on failure.
+ */
+export async function setExplorerIcons(
+  socket: WorkspaceSocket,
+  workspaceId: string,
+  entries: ExplorerIconEntry[],
+): Promise<ExplorerIconEntry[]> {
+  const doc = await loadExplorerIconDoc(socket, workspaceId);
+  const pendingUpdate = captureDocUpdate(doc);
+  applyExplorerIcons(doc, entries);
+  const delta = pendingUpdate.finish();
+  await pushDocUpdate(
+    socket,
+    workspaceId,
+    explorerIconDocId(workspaceId),
+    Buffer.from(delta).toString("base64"),
+  );
+  return entries;
+}
+
 /**
  * Set or clear the sidebar icon for a single explorer entity.
  *
@@ -124,26 +169,8 @@ export async function setExplorerIcon(
   key: ExplorerIconKey,
   icon: ExplorerIconValue | null,
 ): Promise<{ key: ExplorerIconKey; icon: ExplorerIconValue | null }> {
-  const doc = await loadExplorerIconDoc(socket, workspaceId);
-  const pendingUpdate = captureDocUpdate(doc);
-
-  const map = doc.getMap(key);
-  if (!map.has("id")) map.set("id", key);
-  if (icon === null) {
-    if (map.has("icon")) map.delete("icon");
-  } else {
-    map.set("icon", icon);
-  }
-
-  const delta = pendingUpdate.finish();
-  await pushDocUpdate(
-    socket,
-    workspaceId,
-    explorerIconDocId(workspaceId),
-    Buffer.from(delta).toString("base64"),
-  );
-
-  return { key, icon };
+  const [entry] = await setExplorerIcons(socket, workspaceId, [{ key, icon }]);
+  return entry;
 }
 
 /**

@@ -10,11 +10,13 @@ import {
   type WorkspaceSocket,
 } from "../ws.js";
 import {
+  docIconEntries,
   docIconKey,
   folderIconKey,
   getExplorerIcon,
   normalizeIconInput,
   setExplorerIcon,
+  setExplorerIcons,
   type ExplorerIconInput,
 } from "../util/explorerIcon.js";
 
@@ -23,7 +25,7 @@ import {
  * shorthand string, a full `{type:"emoji",unicode}` / `{type:"affine-icon",name,color?}`
  * object, or `null` to clear the icon. `"icon"` is accepted as an alias for `"affine-icon"`.
  */
-const iconSchema = z
+export const iconSchema = z
   .union([
     z.string(),
     z.object({ type: z.literal("emoji"), unicode: z.string() }),
@@ -114,6 +116,36 @@ export function registerIconTools(
       },
     },
     updateDocIconHandler as any,
+  );
+
+  // ─── update_doc_icons ───────────────────────────────────────────────────────
+  const updateDocIconsHandler = async (parsed: {
+    workspaceId?: string;
+    icons: Array<{ docId: string; icon: ExplorerIconInput }>;
+  }) => {
+    const workspaceId = resolveWorkspaceId(parsed.workspaceId);
+    const entries = docIconEntries(parsed.icons); // Validate everything before any write.
+    await withSocket(workspaceId, (socket) => setExplorerIcons(socket, workspaceId, entries));
+    return receipt("doc.update_icons", {
+      workspaceId,
+      count: entries.length,
+      icons: entries.map(({ key, icon }) => ({ docId: key.slice("doc:".length), icon })),
+    });
+  };
+  server.registerTool(
+    "update_doc_icons",
+    {
+      title: "Update Document Icons",
+      description:
+        "Set or clear the sidebar icon on many documents with one write. Each item is " +
+        "{docId, icon} where icon is an emoji string, a full icon object, or null to clear. " +
+        "Atomic: invalid items or duplicate docIds reject the whole call.",
+      inputSchema: {
+        workspaceId: z.string().optional(),
+        icons: z.array(z.object({ docId: z.string().min(1), icon: iconSchema })).min(1).max(200),
+      },
+    },
+    updateDocIconsHandler as any,
   );
 
   // ─── update_folder_icon ─────────────────────────────────────────────────────

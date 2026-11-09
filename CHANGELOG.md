@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- `add_tags_to_docs` attaches several tags to many documents in one atomic write, and `update_doc_icons` sets or clears many sidebar icons in one atomic write.
+- `create_doc` and `create_doc_from_markdown` accept optional `icon` and `tags`; a failure to apply them is reported in `warnings` and does not undo the created document.
+
 ## [3.12.0] - 2026-11-09
 
 ### Added
